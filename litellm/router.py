@@ -72,6 +72,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -3684,6 +3685,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            phase_event("litellm.request.deployment_selected")
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -5340,6 +5342,7 @@ class Router:
                     input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
+                phase_event("litellm.request.deployment_selected")
             except Exception as e:
                 if passthrough_on_no_deployment:
                     return await original_generic_function(model=model, **kwargs)

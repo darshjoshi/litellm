@@ -17,7 +17,9 @@ if TYPE_CHECKING:
 
 
 @cache
-def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None]], Callable[..., None]] | None":
+def _otel_runtime() -> (
+    "tuple[Callable[[str], AbstractContextManager[Span | None]], Callable[..., None], Callable[[str], None]] | None"
+):
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call
@@ -28,7 +30,7 @@ def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None
         from litellm.integrations.otel import logger
     except Exception:
         return None
-    return (logger.phase_span, logger.seed_request_identity)
+    return (logger.phase_span, logger.seed_request_identity, logger.phase_event)
 
 
 @contextmanager
@@ -44,6 +46,14 @@ def phase_span(name: str) -> "Iterator[Span | None]":
         return
     with runtime[0](name) as span:
         yield span
+
+
+def phase_event(name: str) -> None:
+    """Mark a point in the request on its span (no-op without V2)."""
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        return
+    runtime[2](name)
 
 
 def seed_request_identity(user_api_key_dict: object, model: object = None) -> None:

@@ -1633,3 +1633,91 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def _threshold_test_messages(turns: int) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
+    for index in range(turns):
+        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Answer {index}: the capital is city number {index}."}],
+            }
+        )
+    return messages
+
+
+_THRESHOLD_TEST_TOOLS: Final = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_capital",
+            "description": "Look up the capital of a country",
+            "parameters": {"type": "object", "properties": {"country": {"type": "string"}}},
+        },
+    }
+]
+
+
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold() -> None:
+    """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
+    tools and system-message adjustments, so the boundary values must agree exactly."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    messages = _threshold_test_messages(turns=12)
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+def test_messages_reach_token_count_stops_at_the_first_message_past_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the prompt-cache eligibility check used to tokenize every message of a 700k-token
+    Claude Code conversation to compare against a 1024-token minimum, costing hundreds of
+    milliseconds per request before routing. Counting must stop once the threshold is crossed."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    messages = _threshold_test_messages(turns=500)
+    counted_batches: list[int] = []
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_batches.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+    assert token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=1024
+    )
+    assert all(size == 1 for size in counted_batches)
+    assert len(counted_batches) < len(messages) // 4, len(counted_batches)
+
+    counted_batches.clear()
+    assert not token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=10**9
+    )
+    assert len(counted_batches) == len(messages)
+
+
+def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the counter disabled token_counter reports 0, so only a non-positive threshold is reached."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    messages = _threshold_test_messages(turns=3)
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False

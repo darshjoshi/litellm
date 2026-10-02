@@ -62,3 +62,9 @@ def test_wrappers_no_op_when_runtime_absent(monkeypatch):
         assert span is None
 
     assert runtime.seed_request_identity({"token": "sk-x"}, model="gpt-4o") is None
+
+
+def test_phase_event_no_ops_when_runtime_absent(monkeypatch):
+    monkeypatch.setattr(runtime, "_otel_runtime", lambda: None)
+
+    assert runtime.phase_event("litellm.request.body_parsed") is None

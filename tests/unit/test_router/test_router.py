@@ -18922,3 +18922,21 @@ async def test_failure_rpm_increment_declares_the_router_usage_key_family():
 
     assert seen == ["router_usage"]
     assert current_service_target() is None
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_deployment_selected_once(monkeypatch: pytest.MonkeyPatch):
+    events: list[str] = []  # mutable-ok: recorder for the injected phase_event double
+    monkeypatch.setattr(litellm.router, "phase_event", events.append)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    await router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == ["litellm.request.deployment_selected"]
