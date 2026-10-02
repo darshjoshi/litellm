@@ -12,7 +12,8 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -69,6 +70,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendTransaction,
     WindowSpendUpdateQueue,
 )
+from litellm.proxy.db.db_write_span import db_write_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
@@ -271,9 +273,23 @@ def _timed_request_duration_ms(
     return duration_ms
 
 
-def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
+_ENTITY_SPEND_MODELS: Final[Mapping[_EntitySpendTable, str]] = MappingProxyType(
+    {
+        "litellm_tagtable": "LiteLLM_TagTable",
+        "litellm_agentstable": "LiteLLM_AgentsTable",
+        "litellm_modelaccessgroupbudgettable": "LiteLLM_ModelAccessGroupBudgetTable",
+        "litellm_projecttable": "LiteLLM_ProjectTable",
+    }
+)
+
+
+@asynccontextmanager
+async def _spend_update_tx(
+    prisma_client: PrismaClient, table: str, call_type: str = "commit_spend_updates"
+) -> AsyncGenerator[_SpendTransaction]:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
-    return tx
+    async with db_write_span(call_type, table), tx as transaction:
+        yield transaction
 
 
 _daily_spend_commit_started: Final[ContextVar[asyncio.Event | None]] = ContextVar(
@@ -2032,7 +2048,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_UserTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
                             # batch_() issues statements sequentially within the tx, so iteration
@@ -2073,7 +2089,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_VerificationToken") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
                             for token, response_cost in sorted(key_list_transactions.items()):
@@ -2105,7 +2121,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_TeamTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
@@ -2143,7 +2159,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_TeamMembership") as transaction:
                         await _write_team_member_spend(transaction, team_member_list_transactions)
                     # Transaction succeeded, break out of retry loop
                     break
@@ -2179,7 +2195,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_OrganizationTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
                             for org_id, response_cost in sorted(org_list_transactions.items()):
@@ -2205,7 +2221,10 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction, transaction.batch_() as batcher:
+                    async with (
+                        _spend_update_tx(prisma_client, "LiteLLM_OrganizationMembership") as transaction,
+                        transaction.batch_() as batcher,
+                    ):
                         for key, response_cost in sorted(org_member_list_transactions.items()):
                             _, quoted_org_id, _, quoted_user_id = key.split("::")
                             batcher.litellm_organizationmembership.update_many(
@@ -2323,7 +2342,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, _ENTITY_SPEND_MODELS[table_accessor]) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
                             for entity_id, response_cost in sorted(transactions.items()):
@@ -2490,7 +2509,7 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            async with _spend_update_tx(prisma_client) as transaction:
+                            async with _spend_update_tx(prisma_client, table.name, "upsert_daily_spend") as transaction:
                                 await transaction.execute_raw(sql, *params)
                                 _mark_daily_spend_commit_started()
                             _mark_daily_spend_commit_finished()

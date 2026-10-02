@@ -85,13 +85,21 @@ shows as `redis.incr router_cooldowns` followed by `redis.ttl router_cooldowns` 
 `"redis.get"`, and only genuinely out-of-request work (a background sync with no
 owner) may leave one; a per-request pipeline that carries several
 owners' ops is `"redis.pipeline"` with its op count on `litellm.metadata.op_count`
-(an int, never stringified). Postgres helpers keep the `"{service} {call_type}"`
-name (`"postgres get_data"`) until they get `db.select {table}` names, as does
-every other non-Redis service (`"batch_write_to_db _PROXY_track_cost_callback"`):
-one scheme, `{service}.{verb} {target}` when the method maps to a verb and
-`{service} {call_type}` otherwise, and never a count, key or id in the name. Either way
-the raw method name stays on `litellm.service.call_type` and `db.operation.name`
-(and the bare `call_type` the metrics are keyed by), the target lands on
+(an int, never stringified). Postgres helpers are `postgres.{verb} {table}`
+(`"postgres.select LiteLLM_VerificationToken"`, `"postgres.update LiteLLM_TeamTable"`,
+`"postgres.insert LiteLLM_SpendLogs"`): the SQL verb comes from
+`_POSTGRES_OPERATION_BY_CALL_TYPE` in `model/spans.py`, the table from that map when
+the helper only touches one model and from the event's `table_name` metadata (the
+`PrismaClient` CRUD literals, or a `LiteLLM_*` model name from `db_write_span`)
+otherwise, so a helper with no known table is a bare `"postgres.select"` and a
+helper the map does not know keeps `"postgres {call_type}"`. The verb lands on
+`db.operation.name`, the table on `db.collection.name` and `"{VERB} {table}"` on
+`db.query.summary`. Every other non-Redis service keeps `"{service} {call_type}"`
+(`"batch_write_to_db _PROXY_track_cost_callback"`): one scheme, `{service}.{verb} {target}`
+when the method maps to a verb and `{service} {call_type}` otherwise, and never a
+count, key or id in the name. Either way the raw method name stays on
+`litellm.service.call_type` (and the bare `call_type` the metrics are keyed by; for
+Redis it is also `db.operation.name`), the target lands on
 `litellm.service.target`, and the litellm call chain that issued the call
 (`_retrieve_from_cache <- _async_get_cache`) travels as
 `ServiceLoggerPayload.caller` onto `litellm.service.caller`, with the forwarding

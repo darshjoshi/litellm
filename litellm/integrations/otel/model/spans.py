@@ -49,8 +49,10 @@ Management/admin endpoints are ordinary FastAPI routes — their SERVER spans ar
 owned by the instrumentor too, so they don't appear as a role here.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -230,9 +232,195 @@ _SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class PostgresOperation:
+    """The SQL verb and primary table behind a Prisma helper, for ``postgres.{verb} {table}``."""
+
+    verb: str
+    table: str | None
+
+
+_POSTGRES_SERVICE: Final = "postgres"
+_PRISMA_MODELS: Final[frozenset[str]] = frozenset(
+    (
+        "LiteLLM_BudgetTable",
+        "LiteLLM_CredentialsTable",
+        "LiteLLM_ProxyModelTable",
+        "LiteLLM_AgentsTable",
+        "LiteLLM_AgentIdentity",
+        "LiteLLM_RetiredAgentIdentity",
+        "LiteLLM_RetiredAgent",
+        "LiteLLM_VerifiedSubject",
+        "LiteLLM_OrganizationTable",
+        "LiteLLM_ModelTable",
+        "LiteLLM_TeamTable",
+        "LiteLLM_ProjectTable",
+        "LiteLLM_DeletedTeamTable",
+        "LiteLLM_UserTable",
+        "LiteLLM_ObjectPermissionTable",
+        "LiteLLM_MCPServerTable",
+        "LiteLLM_MCPToolsetTable",
+        "LiteLLM_MCPUserCredentials",
+        "LiteLLM_MCPUserEnvVars",
+        "LiteLLM_MCPServerOAuthClient",
+        "LiteLLM_SSOIdentityAssertion",
+        "LiteLLM_VerificationToken",
+        "LiteLLM_JWTKeyMapping",
+        "LiteLLM_DeprecatedVerificationToken",
+        "LiteLLM_DeletedVerificationToken",
+        "LiteLLM_EndUserTable",
+        "LiteLLM_ModelAccessGroupBudgetTable",
+        "LiteLLM_TagTable",
+        "LiteLLM_Config",
+        "LiteLLM_SpendLogs",
+        "LiteLLM_BudgetWindowSpend",
+        "LiteLLM_ErrorLogs",
+        "LiteLLM_UserNotifications",
+        "LiteLLM_TeamMembership",
+        "LiteLLM_OrganizationMembership",
+        "LiteLLM_InvitationLink",
+        "LiteLLM_AuditLog",
+        "LiteLLM_DailyUserSpend",
+        "LiteLLM_DailyGlobalSpend",
+        "LiteLLM_DailyOrganizationSpend",
+        "LiteLLM_DailyEndUserSpend",
+        "LiteLLM_DailyAgentSpend",
+        "LiteLLM_DailyTeamSpend",
+        "LiteLLM_DailyTagSpend",
+        "LiteLLM_ProxyWorkerHeartbeat",
+        "LiteLLM_CronJob",
+        "LiteLLM_ManagedFileTable",
+        "LiteLLM_ManagedObjectTable",
+        "LiteLLM_ManagedFileContentTable",
+        "LiteLLM_ManagedVectorStoreTable",
+        "LiteLLM_ManagedVectorStoresTable",
+        "LiteLLM_GuardrailsTable",
+        "LiteLLM_DailyGuardrailMetrics",
+        "LiteLLM_DailyGuardrailUsageUnits",
+        "LiteLLM_DailyPolicyMetrics",
+        "LiteLLM_SpendLogGuardrailIndex",
+        "LiteLLM_SpendLogToolIndex",
+        "LiteLLM_DailyToolSpend",
+        "LiteLLM_DailyModelUsage",
+        "LiteLLM_DailyGatewayRequests",
+        "LiteLLM_PromptTable",
+        "LiteLLM_HealthCheckTable",
+        "LiteLLM_SearchToolsTable",
+        "LiteLLM_SSOConfig",
+        "LiteLLM_ManagedVectorStoreIndexTable",
+        "LiteLLM_CacheConfig",
+        "LiteLLM_UISettings",
+        "LiteLLM_ConfigOverrides",
+        "LiteLLM_SkillsTable",
+        "LiteLLM_PolicyTable",
+        "LiteLLM_PolicyAttachmentTable",
+        "LiteLLM_ToolTable",
+        "LiteLLM_AccessGroupTable",
+        "LiteLLM_ClaudeCodePluginTable",
+        "LiteLLM_MemoryTable",
+        "LiteLLM_AdaptiveRouterState",
+        "LiteLLM_AdaptiveRouterSession",
+        "LiteLLM_AutoRouterBaselineComparison",
+        "LiteLLM_AutoRouterBaselineObservation",
+        "LiteLLM_AutoRouterSession",
+        "LiteLLM_AutoRouterUserSession",
+        "LiteLLM_ShadowEvalJob",
+        "LiteLLM_ShadowEvalAttempt",
+        "LiteLLM_ShadowEvalFunnel",
+        "LiteLLM_WorkflowRun",
+        "LiteLLM_WorkflowEvent",
+        "LiteLLM_WorkflowMessage",
+        "LiteLLM_Lens",
+        "LiteLLM_LensRun",
+        "LiteLLM_LensWorker",
+    )
+)
+_TABLE_NAME_METADATA_KEY: Final = "table_name"
+
+_PRISMA_MODEL_BY_TABLE_NAME: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "key": "LiteLLM_VerificationToken",
+        "keys": "LiteLLM_VerificationToken",
+        "combined_view": "LiteLLM_VerificationToken",
+        "user": "LiteLLM_UserTable",
+        "users": "LiteLLM_UserTable",
+        "team": "LiteLLM_TeamTable",
+        "config": "LiteLLM_Config",
+        "spend": "LiteLLM_SpendLogs",
+        "enduser": "LiteLLM_EndUserTable",
+        "budget": "LiteLLM_BudgetTable",
+        "user_notification": "LiteLLM_UserNotifications",
+    }
+)
+
+_POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = MappingProxyType(
+    {
+        "get_data": PostgresOperation("select", None),
+        "get_generic_data": PostgresOperation("select", None),
+        "insert_data": PostgresOperation("insert", None),
+        "update_data": PostgresOperation("update", None),
+        "delete_data": PostgresOperation("delete", None),
+        "get_key_object": PostgresOperation("select", "LiteLLM_VerificationToken"),
+        "get_user_object": PostgresOperation("select", "LiteLLM_UserTable"),
+        "get_org_object": PostgresOperation("select", "LiteLLM_OrganizationTable"),
+        "get_org_object_by_alias": PostgresOperation("select", "LiteLLM_OrganizationTable"),
+        "_get_team_db_check": PostgresOperation("select", "LiteLLM_TeamTable"),
+        "get_team_object_by_alias": PostgresOperation("select", "LiteLLM_TeamTable"),
+        "_fetch_team_membership_from_db": PostgresOperation("select", "LiteLLM_TeamMembership"),
+        "get_team_member_default_budget": PostgresOperation("select", "LiteLLM_BudgetTable"),
+        "get_end_user_object": PostgresOperation("select", "LiteLLM_EndUserTable"),
+        "get_tag_object": PostgresOperation("select", "LiteLLM_TagTable"),
+        "get_tag_objects_batch": PostgresOperation("select", "LiteLLM_TagTable"),
+        "get_model_access_group_budgets_batch": PostgresOperation("select", "LiteLLM_ModelAccessGroupBudgetTable"),
+        "get_access_object": PostgresOperation("select", "LiteLLM_AccessGroupTable"),
+        "get_object_permission": PostgresOperation("select", "LiteLLM_ObjectPermissionTable"),
+        "get_jwt_key_mapping_object": PostgresOperation("select", "LiteLLM_JWTKeyMapping"),
+        "get_jwt_key_mapping_cache_keys_for_token": PostgresOperation("select", "LiteLLM_JWTKeyMapping"),
+        "get_managed_vector_store_rows_by_uuids": PostgresOperation("select", "LiteLLM_ManagedVectorStoresTable"),
+        "commit_spend_updates": PostgresOperation("update", None),
+        "update_end_user_spend": PostgresOperation("upsert", None),
+        "upsert_daily_spend": PostgresOperation("upsert", None),
+        "insert_spend_logs": PostgresOperation("insert", None),
+        "migrate_config_credentials": PostgresOperation("update", None),
+        "migrate_sso_credentials": PostgresOperation("update", None),
+        "backfill_mcp_oauth_issuer": PostgresOperation("update", None),
+        "auto_register_jwt_mapping": PostgresOperation("insert", None),
+        "delete_orphaned_jwt_key": PostgresOperation("delete", None),
+        "save_email_settings": PostgresOperation("upsert", None),
+    }
+)
+
+
+def _postgres_table_from_metadata(data: "ServiceSpanData") -> str | None:
+    """The Prisma model named by the event's ``table_name`` metadata, or ``None``.
+
+    Only the short ``PrismaClient`` literals and the model names declared in
+    ``schema.prisma`` resolve, so a free-form string can never become a span-name cardinality."""
+    table_name: Final = data.event_metadata.get(_TABLE_NAME_METADATA_KEY)
+    if not isinstance(table_name, str):
+        return None
+    if table_name in _PRISMA_MODELS:
+        return table_name
+    return _PRISMA_MODEL_BY_TABLE_NAME.get(table_name)
+
+
+def postgres_operation(data: "ServiceSpanData") -> PostgresOperation | None:
+    """The verb and table behind a ``postgres`` service event, else ``None``.
+
+    ``None`` for every other service (Redis keeps its own verb table) and for a
+    Postgres call type this module does not know, which stays ``postgres {call_type}``."""
+    if data.service_name != _POSTGRES_SERVICE or not data.call_type:
+        return None
+    operation: Final = _POSTGRES_OPERATION_BY_CALL_TYPE.get(data.call_type)
+    if operation is None:
+        return None
+    if operation.table is not None:
+        return operation
+    return PostgresOperation(operation.verb, _postgres_table_from_metadata(data))
+
+
 def service_operation(data: "ServiceSpanData") -> str | None:
-    """``"redis.get"`` when the call type is a known datastore verb, else ``None``
-    (Postgres helpers stay function-named until they get ``db.select {table}`` names)."""
+    """``"redis.get"`` when the call type is a known datastore verb, else ``None``."""
     if not data.call_type:
         return None
     verb: Final = _SERVICE_VERB_BY_CALL_TYPE.get(data.call_type)
@@ -244,8 +432,15 @@ def service_operation(data: "ServiceSpanData") -> str | None:
 def service_span_name(data: "ServiceSpanData") -> str:
     """``"{service}.{verb} {target}"`` (``"redis.get llm_response"``) for a known datastore
     verb, ``"{service}.{verb}"`` (``"redis.pipeline"``) when the producer declared no
-    target, else ``"{service} {call_type}"`` (``"postgres get_data"``) — service name alone
-    when no call type is known, so identically-named calls stay distinguishable."""
+    target, ``"postgres.{verb} {table}"`` (``"postgres.select LiteLLM_UserTable"``) for a
+    known Prisma helper (the table comes from the helper, never from the ambient
+    ``service_target``, which names a cache key family), else ``"{service} {call_type}"``
+    (``"postgres some_helper"``) — service name alone when no call type is known, so
+    identically-named calls stay distinguishable."""
+    postgres: Final = postgres_operation(data)
+    if postgres is not None:
+        verb: Final = f"{data.service_name}.{postgres.verb}"
+        return f"{verb} {postgres.table}" if postgres.table else verb
     operation: Final = service_operation(data)
     if operation is None:
         return f"{data.service_name} {data.call_type or ''}".strip()

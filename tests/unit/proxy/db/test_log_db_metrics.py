@@ -150,3 +150,44 @@ async def test_a_cache_hit_after_a_sibling_db_read_emits_no_db_event(success_hoo
     await cache_hit()
 
     assert await _db_call_types(success_hook) == ("read_row",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lookup", "table_name"),
+    [
+        ({"token": "sk-hashed"}, "key"),
+        ({"tokens": ["sk-hashed"]}, "key"),
+        ({"user_id": "u-1"}, "user"),
+        ({"team_id": "t-1"}, "team"),
+        ({"token": "sk-hashed", "user_id": "u-1"}, "key"),
+        ({"table_name": "spend", "token": "sk-hashed"}, "spend"),
+    ],
+)
+async def test_a_crud_method_called_without_table_name_reports_the_table_its_lookup_key_selects(
+    success_hook: AsyncMock, lookup: dict[str, object], table_name: str
+) -> None:
+    engine: Final = _tracked_engine()
+
+    @log_db_metrics
+    async def get_data(*, table_name: str | None = None, **kwargs: object) -> object:
+        return await engine.query("{}", tx_id=None)
+
+    await get_data(**lookup)
+
+    await asyncio.sleep(0)
+    assert success_hook.await_args_list[0].kwargs["event_metadata"] == {"table_name": table_name}
+
+
+@pytest.mark.asyncio
+async def test_a_helper_without_a_table_name_parameter_gets_no_inferred_table(success_hook: AsyncMock) -> None:
+    engine: Final = _tracked_engine()
+
+    @log_db_metrics
+    async def get_team_member_default_budget(*, team_id: str, user_id: str) -> object:
+        return await engine.query("{}", tx_id=None)
+
+    await get_team_member_default_budget(team_id="t-1", user_id="u-1")
+
+    await asyncio.sleep(0)
+    assert success_hook.await_args_list[0].kwargs["event_metadata"] is None

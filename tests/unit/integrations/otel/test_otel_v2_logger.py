@@ -1739,15 +1739,50 @@ def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, t
     assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == untargeted
 
 
-def test_postgres_service_span_keeps_its_function_name_inside_a_targeted_phase():
-    """A DB helper that runs inside ``service_target("auth_objects")`` (the whole auth phase
-    does) is still ``postgres get_data``: the verb scheme is for cache methods, the Postgres
-    rename to ``db.select {table}`` is a separate change."""
+@pytest.mark.parametrize(
+    ("call_type", "event_metadata", "expected"),
+    [
+        ("get_data", {"table_name": "combined_view"}, "postgres.select LiteLLM_VerificationToken"),
+        ("get_data", {"table_name": "team"}, "postgres.select LiteLLM_TeamTable"),
+        ("get_data", {}, "postgres.select"),
+        ("get_generic_data", {"table_name": "users"}, "postgres.select LiteLLM_UserTable"),
+        ("insert_data", {"table_name": "key"}, "postgres.insert LiteLLM_VerificationToken"),
+        ("update_data", {"table_name": "team"}, "postgres.update LiteLLM_TeamTable"),
+        ("delete_data", {"table_name": "user"}, "postgres.delete LiteLLM_UserTable"),
+        ("get_user_object", {}, "postgres.select LiteLLM_UserTable"),
+        ("get_key_object", {}, "postgres.select LiteLLM_VerificationToken"),
+        ("_get_team_db_check", {}, "postgres.select LiteLLM_TeamTable"),
+        ("get_org_object", {}, "postgres.select LiteLLM_OrganizationTable"),
+        ("get_end_user_object", {}, "postgres.select LiteLLM_EndUserTable"),
+        ("get_object_permission", {}, "postgres.select LiteLLM_ObjectPermissionTable"),
+        ("commit_spend_updates", {"table_name": "LiteLLM_UserTable"}, "postgres.update LiteLLM_UserTable"),
+        ("upsert_daily_spend", {"table_name": "LiteLLM_DailyTeamSpend"}, "postgres.upsert LiteLLM_DailyTeamSpend"),
+        ("insert_spend_logs", {"table_name": "LiteLLM_SpendLogs"}, "postgres.insert LiteLLM_SpendLogs"),
+        ("update_end_user_spend", {"table_name": "LiteLLM_EndUserTable"}, "postgres.upsert LiteLLM_EndUserTable"),
+        ("migrate_config_credentials", {"table_name": "LiteLLM_Config"}, "postgres.update LiteLLM_Config"),
+        ("migrate_sso_credentials", {"table_name": "LiteLLM_SSOConfig"}, "postgres.update LiteLLM_SSOConfig"),
+        ("backfill_mcp_oauth_issuer", {"table_name": "LiteLLM_MCPServerTable"}, "postgres.update LiteLLM_MCPServerTable"),
+        ("auto_register_jwt_mapping", {"table_name": "LiteLLM_JWTKeyMapping"}, "postgres.insert LiteLLM_JWTKeyMapping"),
+        ("delete_orphaned_jwt_key", {"table_name": "LiteLLM_VerificationToken"}, "postgres.delete LiteLLM_VerificationToken"),
+        ("save_email_settings", {"table_name": "LiteLLM_Config"}, "postgres.upsert LiteLLM_Config"),
+        ("get_data", {"table_name": "DROP TABLE x"}, "postgres.select"),
+        ("get_data", {"table_name": "LiteLLM_NotInSchema"}, "postgres.select"),
+        ("some_new_helper", {"table_name": "key"}, "postgres some_new_helper"),
+    ],
+)
+def test_postgres_service_span_is_named_by_sql_verb_and_prisma_table(call_type, event_metadata, expected):
+    """A Postgres helper renders as ``postgres.{verb} {table}``: the verb comes from the helper,
+    the table from the helper when it only ever touches one model and from the event's
+    ``table_name`` metadata otherwise (only the bounded ``PrismaClient`` literals and
+    ``LiteLLM_*`` model names resolve, so a stray string cannot become a span name). The
+    ambient ``service_target`` names a cache key family and never leaks into the name."""
     from litellm.integrations.otel.model.payloads import ServiceSpanData
     from litellm.integrations.otel.model.spans import service_span_name
 
-    data = ServiceSpanData(service_name="postgres", call_type="get_data", target="auth_objects")
-    assert service_span_name(data) == "postgres get_data"
+    data = ServiceSpanData(
+        service_name="postgres", call_type=call_type, target="auth_objects", event_metadata=event_metadata
+    )
+    assert service_span_name(data) == expected
 
 
 def test_service_target_declared_by_the_producer_rides_the_service_logger_payload():
@@ -1870,7 +1905,9 @@ def test_async_service_success_hook_emits_service_span():
 
 def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
     """Prisma reaches Postgres over loopback, so without server.address the
-    backend attributes the wait to localhost."""
+    backend attributes the wait to localhost. The span is named by SQL verb and
+    table, with the raw helper name kept on ``litellm.service.call_type`` for the
+    metric labels and the verb, table and summary on the ``db.*`` semconv keys."""
     dsn = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
     logger, exporter = _logger()
     parent = _service_parent(logger)
@@ -1881,14 +1918,19 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
                 logger.async_service_success_hook(
                     payload=_ServicePayload("postgres", "get_data"),
                     parent_otel_span=parent,
+                    event_metadata={"table_name": "combined_view"},
                 )
             )
     finally:
         parent.end()
-    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres.select LiteLLM_VerificationToken"]
     assert span.kind is SpanKind.CLIENT
+    assert span.parent.span_id == parent.get_span_context().span_id
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "get_data"
     assert span.attributes["db.system.name"] == "postgresql"
-    assert span.attributes["db.operation.name"] == "get_data"
+    assert span.attributes["db.operation.name"] == "select"
+    assert span.attributes["db.collection.name"] == "LiteLLM_VerificationToken"
+    assert span.attributes["db.query.summary"] == "SELECT LiteLLM_VerificationToken"
     assert span.attributes["server.address"] == "litellm-prod.abc123.us-east-1.rds.amazonaws.com"
     assert span.attributes["server.port"] == 6432
     assert span.attributes["db.namespace"] == "litellm|reporting"
@@ -1896,6 +1938,44 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
     exported = " ".join(str(value) for value in span.attributes.values())
     assert "dbpassword9090" not in exported
     assert "llmproxy" not in exported
+
+
+def test_postgres_helper_without_a_known_table_keeps_the_verb_and_no_collection():
+    """``get_data(token=...)`` with no ``table_name`` is still a SELECT, so the span is
+    ``postgres.select`` with ``db.operation.name`` set and no ``db.collection.name``
+    rather than a made-up table."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(payload=_ServicePayload("postgres", "get_data"), parent_otel_span=parent)
+        )
+    finally:
+        parent.end()
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres.select"]
+    assert span.attributes["db.operation.name"] == "select"
+    assert "db.collection.name" not in span.attributes
+    assert "db.query.summary" not in span.attributes
+
+
+def test_redis_service_span_attributes_keep_the_raw_method_on_db_operation_name():
+    """The Postgres verb table must not reach Redis: a Redis call keeps its raw method on
+    ``db.operation.name`` and never grows a ``db.collection.name``."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_get_cache", target="llm_response"),
+                parent_otel_span=parent,
+                event_metadata={"table_name": "key"},
+            )
+        )
+    finally:
+        parent.end()
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.get llm_response"]
+    assert span.attributes["db.operation.name"] == "async_get_cache"
+    assert "db.collection.name" not in span.attributes
 
 
 def test_async_service_failure_hook_marks_error_status():
@@ -2094,7 +2174,7 @@ def test_service_call_that_finished_before_the_response_stays_in_the_request_tra
             end_time=_REQUEST_END - 0.1,
         )
     )
-    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres.select"]
     assert span.parent.span_id == server.get_span_context().span_id
     assert span.context.trace_id == server.get_span_context().trace_id
     assert list(span.links) == []

@@ -5,25 +5,43 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
+from types import MappingProxyType
 from typing import Final
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 
+_PRISMA_CLIENT_CRUD: Final = frozenset({"get_data", "update_data", "delete_data"})
+_DEFAULT_TABLE_BY_KWARG: Final[Mapping[str, str]] = MappingProxyType(
+    {"token": "key", "tokens": "key", "user_id": "user", "team_id": "team"}
+)
 
-def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
+
+def _table_metadata_reader(infers_table: bool) -> Callable[[Mapping[str, object]], dict[str, str] | None]:
     """Minimal, non-sensitive ``event_metadata`` for a DB service log.
 
     The raw ``kwargs``/``args`` carry live objects (Prisma client, OTel spans)
-    and secrets (tokens), none of which belongs on a span — so we surface only
-    the table name when present. Everything else is dropped.
+    and secrets (tokens), none of which belongs on a span, so only the table name
+    surfaces. A ``PrismaClient`` CRUD method called without ``table_name`` picks
+    its table from the lookup key, in the same order the method dispatches on.
     """
-    table_name: Final = kwargs.get("table_name")
-    return {"table_name": table_name} if isinstance(table_name, str) else None
+
+    def read(kwargs: Mapping[str, object]) -> dict[str, str] | None:
+        table_name: Final = kwargs.get("table_name")
+        if isinstance(table_name, str):
+            return {"table_name": table_name}
+        if not infers_table:
+            return None
+        inferred: Final = next(
+            (table for key, table in _DEFAULT_TABLE_BY_KWARG.items() if kwargs.get(key) is not None), None
+        )
+        return {"table_name": inferred} if inferred is not None else None
+
+    return read
 
 
 class _DbIoWitness:
@@ -78,8 +96,10 @@ def log_db_metrics(func):
         Exception: If the decorated function raises an exception
     """
 
+    metadata_of: Final = _table_metadata_reader(func.__name__ in _PRISMA_CLIENT_CRUD)
+
     @wraps(func)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args, **kwargs: object):
         start_time: Final[datetime] = datetime.now()
         witness: Final = _DbIoWitness(parent=_db_io_witness.get())
         witness_token: Final = _db_io_witness.set(witness)
@@ -100,7 +120,7 @@ def log_db_metrics(func):
                         duration=(end_time - start_time).total_seconds(),
                         start_time=start_time,
                         end_time=end_time,
-                        event_metadata=_safe_db_event_metadata(kwargs),
+                        event_metadata=metadata_of(kwargs),
                     )
                 )
                 witness.report()
@@ -137,6 +157,7 @@ def log_db_metrics(func):
                 args=args,
                 start_time=start_time,
                 end_time=end_time,
+                metadata_of=metadata_of,
             ):
                 witness.report()
             raise e
@@ -161,10 +182,11 @@ def _is_exception_related_to_db(e: Exception) -> bool:
 async def _handle_logging_db_exception(
     e: Exception,
     func: Callable,
-    kwargs: dict,
+    kwargs: Mapping[str, object],
     args: tuple,
     start_time: datetime,
     end_time: datetime,
+    metadata_of: Callable[[Mapping[str, object]], dict[str, str] | None],
 ) -> bool:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -180,6 +202,6 @@ async def _handle_logging_db_exception(
         duration=(end_time - start_time).total_seconds(),
         start_time=start_time,
         end_time=end_time,
-        event_metadata=_safe_db_event_metadata(kwargs),
+        event_metadata=metadata_of(kwargs),
     )
     return True
