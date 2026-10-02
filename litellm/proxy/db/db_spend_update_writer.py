@@ -549,16 +549,18 @@ class DBSpendUpdateWriter:
             ):
                 return False
 
+            # The auto-router rollups are aggregates like the daily spend tables, so they are
+            # written whether or not per-request spend logs are kept.
+            await self._enqueue_autorouter_turn_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+            )
             if disable_spend_logs is False:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
                     prisma_client=prisma_client,
                     kwargs=kwargs,
-                )
-                await self._enqueue_autorouter_turn_transaction(
-                    payload=payload,
-                    prisma_client=prisma_client,
                 )
             else:
                 verbose_proxy_logger.debug(
