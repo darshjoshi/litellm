@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
@@ -127,6 +128,7 @@ class RouterBudgetLimiting(CustomLogger):
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
 
+    @with_service_target("router_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -488,6 +490,7 @@ class RouterBudgetLimiting(CustomLogger):
         await self._clear_detached_increment_operations()
         return True
 
+    @with_service_target("router_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
@@ -594,6 +597,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
+    @with_service_target("router_budgets")
     async def periodic_sync_in_memory_spend_with_redis(self):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds

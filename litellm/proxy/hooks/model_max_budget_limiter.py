@@ -9,6 +9,7 @@ from typing import Final
 from openai.types import Batch
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
@@ -303,6 +304,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self._detached_increment_operations = None
         self.deployment_budget_config = None
 
+    @with_service_target("model_budgets")
     async def is_key_within_model_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -325,6 +327,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
+    @with_service_target("model_budgets")
     async def get_fallback_model_within_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -339,6 +342,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 continue
         return None
 
+    @with_service_target("model_budgets")
     async def is_user_within_model_budget(
         self,
         user_id: str,
@@ -359,6 +363,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM User: {user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_end_user_within_model_budget(
         self,
         end_user_id: str,
@@ -379,6 +384,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -474,6 +480,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return await self.dual_cache.async_get_cache(key=spend_key)
         return await redis_cache.async_get_cache(key=spend_key)
 
+    @with_service_target("model_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -484,6 +491,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
+    @with_service_target("model_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Track spend for virtual key + model in DualCache

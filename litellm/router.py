@@ -46,6 +46,7 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
+from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -260,7 +261,7 @@ from litellm.router_utils.routing_groups import (
     parse_routing_groups,
     validate_routing_strategy,
 )
-from litellm.router_utils.routing_read_batch import RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
@@ -8347,12 +8348,13 @@ class Router:
 
         ## RPM
         rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
-        await self.cache.async_increment_cache(
-            key=rpm_key,
-            value=1,
-            parent_otel_span=parent_otel_span,
-            ttl=RoutingArgs.ttl.value,
-        )
+        with service_target(ROUTER_USAGE_TARGET):
+            await self.cache.async_increment_cache(
+                key=rpm_key,
+                value=1,
+                parent_otel_span=parent_otel_span,
+                ttl=RoutingArgs.ttl.value,
+            )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
         """

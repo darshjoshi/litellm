@@ -18882,3 +18882,43 @@ async def test_router_subclass_overriding_async_get_healthy_deployments_with_the
     response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None

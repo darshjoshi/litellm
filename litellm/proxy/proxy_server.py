@@ -268,6 +268,7 @@ from functools import lru_cache, partial
 import litellm
 import litellm._redis
 from litellm import Router
+from litellm._internal_context import service_target
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
@@ -348,6 +349,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     log_db_metrics,
 )
+from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
@@ -786,6 +788,7 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
+    SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
     forget_spend_counter,
@@ -3539,10 +3542,11 @@ async def _prepare_spend_counter_increment(
        under-counting (would allow overspend).
     4. Increment is returned for the caller to apply via pipeline
     """
-    await _ensure_spend_counter_initialized(
-        counter_key=counter_key,
-        source_cache_key=source_cache_key,
-    )
+    with service_target(SPEND_COUNTERS_TARGET):
+        await _ensure_spend_counter_initialized(
+            counter_key=counter_key,
+            source_cache_key=source_cache_key,
+        )
     return PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
@@ -3610,13 +3614,14 @@ async def _prepare_window_spend_counter_increment(
         )
         return None
 
-    initialized: Final = await _ensure_window_spend_counter_initialized(
-        counter_key=counter_key,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        window_duration=window_duration,
-        window_start=window_start,
-    )
+    with service_target(SPEND_COUNTERS_TARGET):
+        initialized: Final = await _ensure_window_spend_counter_initialized(
+            counter_key=counter_key,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            window_duration=window_duration,
+            window_start=window_start,
+        )
     if initialized is False:
         return None
     return PendingSpendIncrement(counter_key=counter_key, increment=increment)
@@ -3792,8 +3797,9 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     if batch is None:
         return False
     ttl: Final = redis_cache.get_ttl()
-    for item in pending:
-        batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+    with service_target(SPEND_COUNTERS_TARGET):
+        for item in pending:
+            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
     return True
 
 
@@ -3941,12 +3947,13 @@ async def update_cache(
     """
 
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
-    cached_values: Final = await _read_update_cache_values(
-        keys=update_cache_read_keys(
-            user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
-        ),
-        parent_otel_span=parent_otel_span,
-    )
+    with service_target(AUTH_OBJECTS_TARGET):
+        cached_values: Final = await _read_update_cache_values(
+            keys=update_cache_read_keys(
+                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+            ),
+            parent_otel_span=parent_otel_span,
+        )
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4190,42 +4197,45 @@ async def update_cache(
                 traceback.format_exc(),
             )
 
-    if token is not None and response_cost is not None:
-        await _update_key_cache(token=token, response_cost=response_cost)
+    with service_target(AUTH_OBJECTS_TARGET):
+        if token is not None and response_cost is not None:
+            await _update_key_cache(token=token, response_cost=response_cost)
 
-    if user_id is not None:
-        await _update_user_cache()
+        if user_id is not None:
+            await _update_user_cache()
 
-    if end_user_id is not None:
-        await _update_end_user_cache()
+        if end_user_id is not None:
+            await _update_end_user_cache()
 
-    if team_id is not None:
-        await _update_team_cache()
+        if team_id is not None:
+            await _update_team_cache()
 
-    if tags is not None:
-        await _update_tag_cache()
+        if tags is not None:
+            await _update_tag_cache()
 
     global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
     local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
     shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
 
     if local_object_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(local_object_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
+        with service_target(AUTH_OBJECTS_TARGET):
+            asyncio.create_task(
+                user_api_key_cache.async_set_cache_pipeline(
+                    cache_list=list(local_object_updates),
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
             )
-        )
     if shared_scalar_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(shared_scalar_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
+        with service_target(SPEND_COUNTERS_TARGET):
+            asyncio.create_task(
+                user_api_key_cache.async_set_cache_pipeline(
+                    cache_list=list(shared_scalar_updates),
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                    litellm_parent_otel_span=parent_otel_span,
+                )
             )
-        )
 
 
 def run_ollama_serve():

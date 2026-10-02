@@ -14,6 +14,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import log_redis_failure
@@ -114,6 +115,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             return str(result)
         return None
 
+    @with_service_target("sensitive_route_pins")
     async def set_session_routing(
         self,
         session_id: str,
@@ -161,6 +163,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             local_only=True,
         )
 
+    @with_service_target("sensitive_route_pins")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
