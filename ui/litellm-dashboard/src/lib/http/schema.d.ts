@@ -34263,6 +34263,7 @@ export interface components {
             allow_all_keys: boolean;
             /** Allowed Tools */
             allowed_tools?: string[];
+            approval_policy?: components["schemas"]["MCPApprovalPolicy"] | null;
             /**
              * Approval Status
              * @description Approval status: 'pending_review', 'active', 'rejected'
@@ -36933,6 +36934,21 @@ export interface components {
              */
             value: string;
         };
+        /**
+         * MCPApprovalPolicy
+         * @description Per-server policy for tools an admin marks high-risk: calls must carry a signed,
+         *     non-expired approval reference issued by the external approval service pinned here.
+         */
+        MCPApprovalPolicy: {
+            /** Audience */
+            audience?: string | null;
+            /** Issuer */
+            issuer: string;
+            /** Jwks Url */
+            jwks_url: string;
+            /** Tools */
+            tools: string[];
+        };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
             /** Args */
@@ -38243,6 +38259,7 @@ export interface components {
             allow_all_keys: boolean;
             /** Allowed Tools */
             allowed_tools?: string[] | null;
+            approval_policy?: components["schemas"]["MCPApprovalPolicy"] | null;
             /**
              * Approval Status
              * @description Server-managed: set by the endpoint; caller values are overridden.
@@ -47335,6 +47352,7 @@ export interface components {
             allow_all_keys: boolean;
             /** Allowed Tools */
             allowed_tools?: string[] | null;
+            approval_policy?: components["schemas"]["MCPApprovalPolicy"] | null;
             /** Args */
             args?: string[];
             /** Audience */

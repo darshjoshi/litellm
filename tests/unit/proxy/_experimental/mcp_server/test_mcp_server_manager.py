@@ -15800,3 +15800,149 @@ class TestToolCatalogGuard:
             proxy_logging_obj=proxy_logging_obj,
             server=server,
         )
+
+
+def _approval_policy_for_builder_tests():
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    return MCPApprovalPolicy(
+        tools=("delete_records",),
+        issuer="https://approvals.example.com",
+        jwks_url="https://approvals.example.com/.well-known/jwks.json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_list_table_carries_approval_policy():
+    manager = MCPServerManager()
+    policy = _approval_policy_for_builder_tests()
+    server = MCPServer(
+        server_id="approval-list-server",
+        name="records",
+        server_name="records_mcp",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        approval_policy=policy,
+    )
+
+    assert manager._build_mcp_server_table(server).approval_policy == policy
+
+    manager.registry[server.server_id] = server
+    try:
+        listed = await manager.get_all_mcp_servers_unfiltered()
+    finally:
+        manager.registry.pop(server.server_id, None)
+    assert listed[0].approval_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_health_check_table_carries_approval_policy():
+    policy = _approval_policy_for_builder_tests()
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="approval-health-server",
+        name="records",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        approval_policy=policy,
+    )
+    manager.registry[server.server_id] = server
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager._mcp_server_reachability",
+            AsyncMock(return_value=("healthy", None)),
+        ):
+            table = await manager.health_check_server(server.server_id)
+    finally:
+        manager.registry.pop(server.server_id, None)
+    assert table.approval_policy == policy
+
+
+def test_temporary_mcp_server_record_carries_approval_policy():
+    from litellm.proxy._types import NewMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import _build_temporary_mcp_server_record
+
+    policy = _approval_policy_for_builder_tests()
+    payload = NewMCPServerRequest(
+        server_name="records_mcp",
+        url="https://example.com/mcp",
+        transport="http",
+        approval_policy=policy,
+    )
+
+    table = _build_temporary_mcp_server_record(payload, "admin", "temp-id")
+    assert table.approval_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_approval_reference_does_not_cross_servers_sharing_a_name():
+    """A's alias equals B's server_name: a reference minted for A's server_id must not
+    authorize the same tool on B, only on A."""
+    import json as _json
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.proxy._experimental.mcp_server.approval_reference import _jwks_cache
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url = "https://approvals.example.com/.well-known/jwks.json"
+    jwks_doc = _json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+    jwks_doc.update({"kid": "kid-1", "use": "sig", "alg": "RS256"})
+    await _jwks_cache.async_set_cache(jwks_url, [jwks_doc])
+    try:
+        policy = MCPApprovalPolicy(
+            tools=("delete_records",),
+            issuer="https://approvals.example.com",
+            jwks_url=jwks_url,
+        )
+        manager = MCPServerManager()
+        server_a = MCPServer(
+            server_id="srv-a",
+            name="records",
+            alias="records",
+            url="https://a.example.com/mcp",
+            transport=MCPTransport.http,
+            approval_policy=policy,
+        )
+        server_b = MCPServer(
+            server_id="srv-b",
+            name="records",
+            server_name="records",
+            url="https://b.example.com/mcp",
+            transport=MCPTransport.http,
+            approval_policy=policy,
+        )
+        reference_for_a = pyjwt.encode(
+            {
+                "iss": "https://approvals.example.com",
+                "exp": int(time.time()) + 600,
+                "jti": "jti-shared",
+                "mcp_server": "srv-a",
+                "mcp_tool": "delete_records",
+            },
+            key,
+            algorithm="RS256",
+            headers={"kid": "kid-1"},
+        )
+        call = {
+            "name": "delete_records",
+            "arguments": {},
+            "server_name": "records",
+            "user_api_key_auth": None,
+            "proxy_logging_obj": None,
+            "raw_headers": {MCP_APPROVAL_REFERENCE_HEADER: reference_for_a},
+        }
+
+        await manager.pre_call_tool_check(server=server_a, **call)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(server=server_b, **call)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "mcp_approval_reference_invalid"
+    finally:
+        _jwks_cache.flush_cache()
